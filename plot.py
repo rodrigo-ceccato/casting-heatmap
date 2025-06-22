@@ -7,8 +7,9 @@ import matplotlib.gridspec as gridspec
 # ——— CONFIG ———
 CSV_PATH = 'Casting.csv'    # ← your CSV file
 NAME_COL = 'Seu nome'
+OUTPUT_PDF = 'casting_heatmap_with_table.pdf'
 
-# — auto-detect the preference columns to avoid typos/KeyErrors —
+# — auto-detect the preference columns —
 cols = pd.read_csv(CSV_PATH, nrows=0).columns.tolist()
 FIRST_COL  = next(c for c in cols if c.startswith('Primeira opção'))
 SECOND_COL = next(c for c in cols if c.startswith('Segunda opção'))
@@ -32,15 +33,16 @@ pivot = (
     .groupby(['role','actor'])
     .size()
     .unstack(fill_value=0)
-    .reindex(index=roles)      # keep original role order
-    .sort_index(axis=1)        # actors alpha-sorted
+    .reindex(index=roles)
+    .sort_index(axis=1)
 )
 
-def plot_heatmap_with_table_and_overlay(
+def plot_and_save(
     df, pivot, roles,
     NAME_COL,
     FIRST_COL, SECOND_COL, THIRD_COL, REFUSE_COL,
-    casting_cols
+    casting_cols,
+    output_pdf
 ):
     # symbol → (marker, color, font size)
     symbols = {
@@ -50,30 +52,28 @@ def plot_heatmap_with_table_and_overlay(
         REFUSE_COL: ('✘', 'red',    18),
     }
 
-    # actor→x-index, role→y-index
-    actors    = pivot.columns.tolist()
+    # map actors → x index, role → y index
+    actors     = pivot.columns.tolist()
     actor_to_x = {a:i for i,a in enumerate(actors)}
     role_to_y  = {r:i for i,r in enumerate(roles)}
 
-    # — build preference-table strings —
+    # 1) Build preference‐table strings
     pref_grid = pd.DataFrame('', index=df[NAME_COL], columns=roles)
     for _, row in df.iterrows():
         person = row[NAME_COL]
-        # ★/☆/✩
         for col in (FIRST_COL, SECOND_COL, THIRD_COL):
             role = row[col]
             if pd.notna(role) and role in roles:
                 pref_grid.at[person, role] += symbols[col][0]
-        # ✘ in the table too
         no_role = row[REFUSE_COL]
         if pd.notna(no_role) and no_role in roles:
             pref_grid.at[person, no_role] += symbols[REFUSE_COL][0]
 
-    # — set up the figure with a table on top, heatmap below —
+    # 2) Draw figure with table on top, discrete‐palette heatmap below
     fig = plt.figure(figsize=(14,12))
     gs  = gridspec.GridSpec(2, 1, height_ratios=[1, 3], hspace=0.3)
 
-    # ─── top: preference table ───
+    # ─── TOP: preference table ───
     ax0 = fig.add_subplot(gs[0])
     ax0.axis('off')
     tbl = ax0.table(
@@ -86,7 +86,6 @@ def plot_heatmap_with_table_and_overlay(
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(10)
     tbl.scale(1, 1.3)
-    # color each cell by its last symbol
     for i, person in enumerate(pref_grid.index):
         for j, role in enumerate(pref_grid.columns):
             txt = pref_grid.at[person, role]
@@ -99,18 +98,38 @@ def plot_heatmap_with_table_and_overlay(
         pad=12
     )
 
-    # ─── bottom: heatmap + overlay ───
+    # ─── BOTTOM: discrete heatmap + overlay + grid ───
     ax1 = fig.add_subplot(gs[1])
-    im = ax1.imshow(pivot.values, aspect='auto', cmap='viridis')
-    fig.colorbar(im, ax=ax1, fraction=0.046, pad=0.04, label='Nº de escolhas')
+    max_val = int(pivot.values.max())
+    cmap    = plt.get_cmap('viridis', max_val+1)
+    im = ax1.imshow(
+        pivot.values,
+        aspect='auto',
+        cmap=cmap,
+        vmin=0,
+        vmax=max_val,
+        interpolation='nearest'
+    )
+    cbar = fig.colorbar(
+        im, ax=ax1,
+        ticks=range(0, max_val+1),
+        label='Nº de escolhas'
+    )
+    cbar.ax.set_yticklabels([str(i) for i in range(0, max_val+1)])
+
+    # grid lines
+    ax1.set_xticks(np.arange(-.5, len(actors), 1), minor=True)
+    ax1.set_yticks(np.arange(-.5, len(roles), 1), minor=True)
+    ax1.grid(which='minor', color='white', linestyle='-', linewidth=1)
+    ax1.tick_params(which="minor", bottom=False, left=False)
 
     ax1.set_xticks(np.arange(len(actors)))
     ax1.set_xticklabels(actors, rotation=45, ha='right')
     ax1.set_yticks(np.arange(len(roles)))
     ax1.set_yticklabels(roles)
-    ax1.set_title('Mapa de Calor com Sobreposição de Preferências')
+    ax1.set_title('Mapa de Calor (discreto) com Sobreposição de Preferências')
 
-    # → overlay ★/☆/✩ at the actor they actually cast
+    # overlay ★/☆/✩
     for _, row in df.iterrows():
         for pref_col in (FIRST_COL, SECOND_COL, THIRD_COL):
             role = row[pref_col]
@@ -122,7 +141,6 @@ def plot_heatmap_with_table_and_overlay(
             actor = row[col_name]
             if pd.isna(actor):
                 continue
-
             sym, color, sz = symbols[pref_col]
             x = actor_to_x.get(actor)
             y = role_to_y[role]
@@ -133,12 +151,11 @@ def plot_heatmap_with_table_and_overlay(
                      ha='center', va='center',
                      color=color, fontsize=sz, weight='bold')
 
-    # → overlay ✘ at **their own actor-column** for the role they refused
+    # overlay ✘
     for _, row in df.iterrows():
         no_role = row[REFUSE_COL]
         if pd.isna(no_role) or no_role not in roles:
             continue
-        # assume respondent’s first name matches column
         resp = row[NAME_COL].strip().split()[0]
         x = actor_to_x.get(resp)
         y = role_to_y[no_role]
@@ -150,13 +167,16 @@ def plot_heatmap_with_table_and_overlay(
                  ha='center', va='center',
                  color=color, fontsize=sz, weight='bold')
 
+    # — save to PDF instead of show —
     plt.tight_layout()
-    plt.show()
+    plt.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
 
-# — invoke the plot —
-plot_heatmap_with_table_and_overlay(
+# — invoke and save PDF —
+plot_and_save(
     df, pivot, roles,
     NAME_COL,
     FIRST_COL, SECOND_COL, THIRD_COL, REFUSE_COL,
-    casting_cols
+    casting_cols,
+    OUTPUT_PDF
 )
