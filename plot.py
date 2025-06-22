@@ -116,7 +116,7 @@ def plot_and_save(df, pivot, roles, actors,
     ax1 = fig.add_subplot(gs[1])
     max_val = int(pivot.values.max())
     im = ax1.imshow(pivot.values,
-                    cmap=plt.get_cmap('viridis', max_val + 1),
+                    cmap=plt.get_cmap('Greys', max_val + 1),
                     vmin=0, vmax=max_val,
                     aspect='auto', interpolation='nearest')
     cbar = fig.colorbar(im, ax=ax1,
